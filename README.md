@@ -1,8 +1,26 @@
+这也许是最适合deepseekharness的壁纸了。在这个壁纸里，你可以养三头虎鲸，它们生活的海洋，会随着电脑的本地时间改变。
+
+你看到的不是提前录好的视频，而是一片实时演算的海洋。三头虎鲸会自己跳水、翻滚、潜水，浮出水面喷水，偶尔还会追赶鱼群。
+
+欢迎各位使用，star
+
 # 潮汐之间 · ASCII Orca for DeepSeek Harness
 
 独立、离线可用的三维 ASCII 虎鲸壁纸。八个时段：深夜、凌晨、日出、正午、下午、黄昏、晚霞、傍晚；也可按设备当地时间平滑过渡。提供28%、33%和38.2%水上空间的三种构图。
 
 正常模式以巡游、滑行、近海床深潜和觅食为主。小鱼是持续运动的个体，会逃离追逐。换气以真实露出水面的呼吸孔为起点，只有部分换气出现可见雾气。跃出是很少发生的背景事件；落水产生冠状飞溅、泡沫、涟漪和水下气泡。
+
+## 一天里的海
+
+同一片海在一天中的不同光色，均由壁纸渲染器实时绘制（1440×810）：
+
+| 深夜 0:00 | 凌晨 4:42 | 日出 6:24 | 正午 12:00 |
+| :---: | :---: | :---: | :---: |
+| ![深夜](wallpaper/previews/night-balanced.webp) | ![凌晨](wallpaper/previews/predawn-balanced.webp) | ![日出](wallpaper/previews/sunrise-balanced.webp) | ![正午](wallpaper/previews/day-balanced.webp) |
+
+| 下午 15:00 | 黄昏 17:00 | 晚霞 18:00 | 傍晚 19:12 |
+| :---: | :---: | :---: | :---: |
+| ![下午](wallpaper/previews/afternoon-balanced.webp) | ![黄昏](wallpaper/previews/golden-balanced.webp) | ![晚霞](wallpaper/previews/sunset-balanced.webp) | ![傍晚](wallpaper/previews/dusk-balanced.webp) |
 
 ## 先看适配预览
 
@@ -46,8 +64,6 @@ dsh plugin --profile <实际使用的profile> add "<tgz 的绝对路径>"
 
 本包核对了当前官方客户端模块工厂及 `webServer.register` 契约，使用语义选择器和已存在的 DSH 表面 token，不依赖 CSS 模块哈希，不使用不存在的 `shell.background` slot。
 
-## 暂停与偏好
+## 许可
 
-隐藏页面时暂停；尊重 `prefers-reduced-motion`，提供静止画面。没有声音、跟踪、远程字体或远程美术素材。动画是适合背景观看的艺术处理，不是野外行为模拟器。
-
-MIT。保留上游 ASCII Sharks（©2026 drewdi）的许可。更多来源说明见 `THIRD_PARTY_NOTICES.md`。预览页的 WebP 通过本包静态清单提供正确的 image/webp 类型。
+MIT，见 [LICENSE](LICENSE)。
