@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "wallpaper": {
+    "theme": "auto",
+    "composition": "balanced",
+    "brightness": 0.97,
+    "saturation": 1.11,
+    "blur": 0.3,
+    "quiet": true,
+    "paused": false,
+    "enabled": true
+  }
+}
