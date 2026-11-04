@@ -33,72 +33,113 @@ window.__ModuleLoader__.load({ id: 'dsh-whalepaper', factory: (require) => {
   }
   function createStore() {
     var form = null, off = null, local = readLocal(), listeners = [], cache = null;
+    var edits = new Map(), sequence = 0, generation = 0, flight = null, queued = false, blocked = false, error = '', waiters = [];
     function notify() { cache = null; for (var fn of listeners.slice()) { try { fn(); } catch (error) { console.error('[whalepaper] settings listener failed', error); } } }
     function native() { return !!(form && form.getSnapshot && form.getSnapshot().mode === 'host'); }
     function snapshot() {
+      var base = local;
       if (form && form.getSnapshot) {
         var current = form.getSnapshot();
-        if (current.status === 'ready' && current.value) return normalize(current.value);
+        if (current.status === 'ready' && current.value) base = normalize(current.value);
       }
-      return local;
+      var next = { ...base };
+      for (var [key, edit] of edits) next[key] = edit.value;
+      return normalize(next);
     }
     function get() { if (!cache) cache = snapshot(); return cache; }
+    function status() {
+      if (error) return error;
+      if (native()) {
+        if (edits.size || flight) return '正在保存…';
+        return form.getSnapshot().status === 'ready' ? '设置已保存到当前 profile' : '正在加载宿主设置…';
+      }
+      return '本地预览：设置已保存在浏览器';
+    }
+    function reconcile() {
+      var value = form?.getSnapshot?.().value;
+      if (!value) return;
+      for (var [key, edit] of edits) if (edit.accepted && value[key] === edit.value) edits.delete(key);
+    }
+    function onHostChange() { reconcile(); notify(); queue(); }
+    function queue() {
+      if (queued || flight || blocked || !native()) return;
+      queued = true;
+      Promise.resolve().then(() => { queued = false; pump(); });
+    }
+    function pump() {
+      if (flight || blocked || !native()) return;
+      var current = form.getSnapshot();
+      if (current.status !== 'ready') return;
+      if (current.writable === false) { error = '保存失败：当前设置只读，请检查宿主权限后重试'; blocked = true; notify(); return; }
+      var batch = [...edits].filter(([, edit]) => !edit.accepted);
+      if (!batch.length) return;
+      var target = form, epoch = generation;
+      var token = { batch, through: Math.max(...batch.map(([, edit]) => edit.seq)) };
+      flight = token;
+      var ops = batch.map(([key, edit]) => edit.unset ? { op:'unset', path:[key] } : { op:'set', path:[key], value:edit.value });
+      Promise.resolve().then(() => target.mutate(ops)).then(ok => finish(ok === true), () => finish(false));
+      function finish(ok) {
+        if (generation !== epoch || flight !== token) return;
+        flight = null;
+        if (ok) {
+          for (var [key, sent] of batch) if (edits.get(key)?.seq === sent.seq) edits.set(key, { ...sent, accepted:true });
+          reconcile(); error = '';
+        } else { blocked = true; error = '保存失败，当前调整已保留，请重试保存'; }
+        var settled = waiters.filter(w => w.seq <= token.through); waiters = waiters.filter(w => w.seq > token.through);
+        for (var waiter of settled) waiter.resolve(ok);
+        local = snapshot(); persistLocal(); notify(); queue();
+      }
+    }
     function attach(next) {
       if (!next || form === next) return;
-      form = next;
-      if (typeof next.subscribe === 'function') off = next.subscribe(notify);
-      notify();
+      off?.(); generation++; flight = null; form = next; blocked = false; error = '';
+      if (typeof next.subscribe === 'function') off = next.subscribe(onHostChange);
+      onHostChange();
     }
     function detach(next) {
       if (form !== next) return;
       try { off?.(); } catch {}
-      off = null; form = null; notify();
+      local = get(); off = null; form = null; generation++; flight = null; notify();
     }
     function persistLocal() { try { localStorage.setItem(storageKey, JSON.stringify(local)); } catch {} }
     function write(patch) {
       if (native()) {
         var next = normalize({ ...get(), ...patch });
-        var ops = [];
-        for (var key of FIELD_KEYS) if (Object.prototype.hasOwnProperty.call(patch, key)) ops.push({ op:'set', path:[key], value: next[key] });
-        if (!ops.length) return Promise.resolve(true);
-        return form.mutate(ops).then(ok => { if (!ok) notify(); return ok; });
+        for (var key of FIELD_KEYS) if (Object.prototype.hasOwnProperty.call(patch, key)) edits.set(key, { value:next[key], seq:++sequence, accepted:false });
+        local = next; persistLocal(); blocked = false; error = ''; notify();
+        var result = new Promise(resolve => waiters.push({ seq:sequence, resolve })); queue(); return result;
       }
-      local = normalize({ ...get(), ...patch }); persistLocal(); notify(); return Promise.resolve(true);
+      local = normalize({ ...get(), ...patch }); for (var key of Object.keys(patch)) edits.delete(key); persistLocal(); notify(); return Promise.resolve(true);
     }
     function reset() {
-      if (native()) return form.mutate(FIELD_KEYS.map(key => ({ op:'unset', path:[key] })));
-      local = normalize(defaults); persistLocal(); notify(); return Promise.resolve(true);
+      if (native()) {
+        var base = normalize(form.getSnapshot().base || defaults);
+        for (var key of FIELD_KEYS) edits.set(key, { value:base[key], seq:++sequence, unset:true, accepted:false });
+        local = base; persistLocal(); blocked = false; error = ''; notify();
+        var result = new Promise(resolve => waiters.push({ seq:sequence, resolve })); queue(); return result;
+      }
+      edits.clear(); local = normalize(defaults); persistLocal(); notify(); return Promise.resolve(true);
     }
     return {
-      get, write, reset, attach, detach,
+      get, write, reset, attach, detach, status,
+      failed: () => !!error,
+      retry() { blocked = false; error = ''; notify(); queue(); },
       native,
       subscribe(fn) { listeners.push(fn); return () => { listeners = listeners.filter(item => item !== fn); }; },
     };
   }
   var store = createStore();
 
-  // Coalesce bursts of slider input into one microtask. A timer-free debounce is
-  // required because this bundle also runs in preview/test sandboxes that do not
-  // expose setTimeout/clearTimeout, and the form queue already serializes writes.
-  var pendingWrite = null, pendingQueued = false;
+  // Optimistic values live in the shared store immediately. One Host write may
+  // be in flight; newer per-field edits coalesce behind it and mask old echoes.
   function scheduleWrite(patch) {
-    pendingWrite = Object.assign(pendingWrite || {}, patch);
-    if (pendingQueued) return;
-    pendingQueued = true;
-    Promise.resolve().then(() => {
-      pendingQueued = false;
-      var next = pendingWrite;
-      pendingWrite = null;
-      if (next) store.write(next);
-    });
+    return store.write(patch);
   }
-  function cancelPendingWrite() { pendingWrite = null; }
+  function cancelPendingWrite() { /* Unmount must not discard accepted user intent. */ }
   // Commit immediately, but never drop a debounced slider value that is still
   // pending: a checkbox/select edit in the same frame must include it.
   function flushWrite(patch) {
-    var next = Object.assign(pendingWrite || {}, patch);
-    pendingWrite = null;
-    return store.write(next);
+    return store.write(patch);
   }
 
   /* Native settings card, contributed to 插件 → 配置 as well as the bundle
@@ -109,10 +150,10 @@ window.__ModuleLoader__.load({ id: 'dsh-whalepaper', factory: (require) => {
     var labelStyle = { color:'var(--dsw-alias-label-primary, inherit)', fontSize:'13px' };
     var hintStyle = { color:'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary, inherit))', fontSize:'12px', lineHeight:'1.5' };
     var rowStyle = { display:'flex', alignItems:'center', justifyContent:'space-between', gap:'16px', padding:'10px 0', borderTop:'1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))' };
-    var selectStyle = { minHeight:'30px', maxWidth:'220px', padding:'4px 8px', font:'inherit', fontSize:'13px', color:'inherit', background:'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))', border:'1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.45))', borderRadius:'6px' };
-    var buttonStyle = { appearance:'none', minHeight:'30px', padding:'4px 12px', font:'inherit', fontSize:'13px', color:'inherit', background:'transparent', border:'1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.45))', borderRadius:'6px', cursor:'pointer' };
+    var selectStyle = { WebkitAppRegion:'no-drag', pointerEvents:'auto', minHeight:'30px', maxWidth:'220px', padding:'4px 8px', font:'inherit', fontSize:'13px', color:'inherit', background:'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))', border:'1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.45))', borderRadius:'6px' };
+    var buttonStyle = { WebkitAppRegion:'no-drag', pointerEvents:'auto', appearance:'none', minHeight:'30px', padding:'4px 12px', font:'inherit', fontSize:'13px', color:'inherit', background:'transparent', border:'1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.45))', borderRadius:'6px', cursor:'pointer' };
     var outputStyle = { width:'58px', textAlign:'right', fontVariantNumeric:'tabular-nums', fontSize:'12px', color:'var(--dsw-alias-label-secondary, inherit)' };
-    var inputStyle = { width:'168px', accentColor:'var(--dsw-alias-brand-fill, #7aa7c7)' };
+    var inputStyle = { width:'168px', accentColor:'var(--dsw-alias-brand-fill, #7aa7c7)', WebkitAppRegion:'no-drag', pointerEvents:'auto', touchAction:'none' };
     function title(key, label, hint) {
       return h('div', { key:key + ':label', style:{ display:'flex', flexDirection:'column', gap:'2px', minWidth:'0' } },
         h('span', { style:labelStyle }, label), hint ? h('span', { style:hintStyle }, hint) : null);
@@ -121,7 +162,7 @@ window.__ModuleLoader__.load({ id: 'dsh-whalepaper', factory: (require) => {
     function options(table, order) { return order.map(item => h('option', { key:item, value:item }, table[item] ?? item)); }
     return function WhalePaperCard() {
       var pair = react.useState(store.get()), state = pair[0], setState = pair[1];
-      react.useEffect(() => store.subscribe(() => setState(store.get())), []);
+      react.useEffect(() => { const off=store.subscribe(() => setState(store.get()));setState(store.get());return off; }, []);
       function commit(patch, soon) {
         setState(previous => ({ ...previous, ...patch }));
         if (soon) scheduleWrite(patch);
@@ -134,12 +175,12 @@ window.__ModuleLoader__.load({ id: 'dsh-whalepaper', factory: (require) => {
       function rangeRow(key, label, hint, min, max, step) {
         var shown = key === 'blur' ? state[key].toFixed(1) + 'px' : Math.round(state[key] * 100) + '%';
         return row(key, label, hint, h('span', { style:{ display:'flex', alignItems:'center', gap:'8px' } },
-          h('input', { type:'range', min, max, step, value:key === 'blur' ? state[key] : Math.round(state[key] * 100), style:inputStyle,
+          h('input', { id:'orca-card-'+key, 'aria-label':label, type:'range', min, max, step, value:key === 'blur' ? state[key] : Math.round(state[key] * 100), style:inputStyle,
             onChange: event => field(key, key === 'blur' ? Number(event.target.value) : Number(event.target.value) / 100, true) }),
           h('output', { style:outputStyle }, shown)));
       }
       function checkboxRow(key, label, hint) {
-        return row(key, label, hint, h('input', { type:'checkbox', checked:state[key] === true, onChange:event => field(key, event.target.checked) }));
+        return row(key, label, hint, h('input', { id:'orca-card-'+key, 'aria-label':label, style:{WebkitAppRegion:'no-drag',pointerEvents:'auto'}, type:'checkbox', checked:state[key] === true, onChange:event => field(key, event.target.checked) }));
       }
       return h('section', { style:{ display:'flex', flexDirection:'column', fontSize:'13px', color:'var(--dsw-alias-label-primary, inherit)' } },
         h('p', { style:{ margin:'0 0 4px', color:'var(--dsw-alias-label-secondary, inherit)', fontSize:'12px', lineHeight:'1.7' } },
@@ -156,7 +197,8 @@ window.__ModuleLoader__.load({ id: 'dsh-whalepaper', factory: (require) => {
         checkboxRow('paused', '暂停动画', '定格当前画面'),
         h('div', { style:{ display:'flex', alignItems:'center', gap:'12px', flexWrap:'wrap', paddingTop:'14px', borderTop:'1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))' } },
           h('button', { type:'button', style:buttonStyle, onClick:() => { store.reset().then(() => setState(store.get())); } }, '恢复默认参数'),
-          h('span', { style:{ ...hintStyle, fontSize:'12px' } }, store.native() ? '设置已保存到当前 profile，立即生效' : '本地预览模式：设置只保存在浏览器')));
+          h('span', { role:'status', style:{ ...hintStyle, fontSize:'12px' } }, store.status()),
+          store.failed() ? h('button', { type:'button', style:buttonStyle, onClick:() => store.retry() }, '重试保存') : null));
     };
   }
 
@@ -201,6 +243,8 @@ html[data-orca-preview][${attr}] .markdown,html[data-orca-preview][${attr}] .spe
 #ascii-orca-controls>button{width:32px;min-height:30px;font-size:19px;color:#d2e0e9;background:rgba(20,31,45,.88)}
 #ascii-orca-panel{position:absolute;right:0;bottom:42px;width:min(318px,calc(100vw - 24px));max-height:calc(100dvh - 100px);overflow:auto;padding:18px;background:#101c2a;border:1px solid #46586d;border-radius:12px;box-shadow:0 15px 50px #0006}
 #ascii-orca-panel[hidden]{display:none}#ascii-orca-panel h2{font-size:15px;margin:0 0 16px;font-weight:500}
+#ascii-orca-panel input,#ascii-orca-panel select,#ascii-orca-panel button{pointer-events:auto;-webkit-app-region:no-drag;touch-action:manipulation}
+#ascii-orca-panel input[type=range]{touch-action:none}
 #ascii-orca-panel label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0}#ascii-orca-panel select{padding:4px 7px;max-width:176px}#ascii-orca-panel input[type=range]{width:112px;accent-color:#a7bfd2}#ascii-orca-panel output{display:inline-block;width:35px;text-align:right;font-variant-numeric:tabular-nums;color:#b5c5d5}#ascii-orca-panel .orca-range{display:flex;align-items:center;gap:5px}#ascii-orca-panel small{display:block;color:#b4c2d0;line-height:1.8;margin-top:14px}#ascii-orca-panel hr{border:0;border-top:1px solid #344459;margin:14px 0}
 #ascii-orca-controls :focus-visible{outline:2px solid #d0e4f3;outline-offset:3px}
 `;
@@ -208,8 +252,12 @@ html[data-orca-preview][${attr}] .markdown,html[data-orca-preview][${attr}] .spe
     const range=(id,label,min,max,step)=>`<label>${label}<span class="orca-range"><input id="ascii-orca-${id}" aria-label="${label}" type="range" min="${min}" max="${max}" step="${step}"><output id="ascii-orca-${id}-value"></output></span></label>`;
     controls.innerHTML='<button type="button" id="ascii-orca-toggle" aria-label="海洋壁纸设置" aria-expanded="false" title="海洋壁纸设置">≈</button><section id="ascii-orca-panel" aria-label="海洋壁纸设置" hidden><h2>潮汐之间 · Harness 适配</h2><label>海洋时刻<select id="ascii-orca-theme"><option value="auto">随当地时间</option><option value="night">深夜 · 月下深蓝</option><option value="predawn">凌晨 · 薰紫薄雾</option><option value="sunrise">日出 · 杏金晨光</option><option value="day">正午 · 晴空碧海</option><option value="afternoon">下午 · 青金波光</option><option value="golden">黄昏 · 金色时刻</option><option value="sunset">晚霞 · 桃金云海</option><option value="dusk">傍晚 · 蓝调暮色</option></select></label><label>海天比例<select id="ascii-orca-composition"><option value="immersive">28% 水上</option><option value="balanced">33% 水上 · 默认</option><option value="golden">38.2% 水上</option></select></label><hr>'+range('brightness','壁纸亮度',60,100,1)+range('saturation','壁纸饱和度',30,115,1)+range('blur','壁纸柔化',0,4,.1)+'<hr><label>安静游动<input id="ascii-orca-quiet" type="checkbox"></label><label>暂停动画<input id="ascii-orca-paused" type="checkbox"></label><label>显示壁纸<input id="ascii-orca-enabled" type="checkbox"></label><button type="button" id="ascii-orca-reset">恢复默认参数</button><small>滤镜只作用于壁纸，文字与输入保持清晰。设置保存到当前 profile；同一组参数也可在 插件 → 配置 中调整。</small></section>';
     const panel=controls.querySelector('#ascii-orca-panel'),toggle=controls.querySelector('#ascii-orca-toggle');
+    const saveStatus=document.createElement('small');saveStatus.id='ascii-orca-save-status';saveStatus.setAttribute('role','status');
+    const retry=document.createElement('button');retry.id='ascii-orca-retry';retry.type='button';retry.textContent='重试保存';retry.hidden=true;
+    panel.append(saveStatus,retry);
+    const onRetry=()=>store.retry();retry.addEventListener('click',onRetry);
     const fields=Object.fromEntries(['theme','composition','brightness','saturation','blur','quiet','paused','enabled'].map(key=>[key,controls.querySelector('#ascii-orca-'+key)]));
-    function sync(){for(const key of ['theme','composition'])fields[key].value=state[key];for(const key of ['quiet','paused','enabled'])fields[key].checked=state[key];for(const key of ['brightness','saturation','blur']){fields[key].value=String(key==='blur'?state[key]:Math.round(state[key]*100));controls.querySelector('#ascii-orca-'+key+'-value').textContent=key==='blur'?state[key].toFixed(1)+'px':Math.round(state[key]*100)+'%';}}
+    function sync(){saveStatus.textContent=store.status();retry.hidden=!store.failed();for(const key of ['theme','composition'])if(fields[key].value!==state[key])fields[key].value=state[key];for(const key of ['quiet','paused','enabled'])fields[key].checked=state[key];for(const key of ['brightness','saturation','blur']){const value=String(key==='blur'?state[key]:Math.round(state[key]*100));if(fields[key].value!==value)fields[key].value=value;controls.querySelector('#ascii-orca-'+key+'-value').textContent=key==='blur'?state[key].toFixed(1)+'px':Math.round(state[key]*100)+'%';}}
     const send=()=>{if(stopped||!frame.contentWindow)return;const origin=new URL(frame.src).origin;frame.contentWindow.postMessage({type:'ascii-orca:configure',theme:state.theme,composition:state.composition,motionScale:state.quiet ? 0.72 : 1,paused:state.paused||!state.enabled||document.hidden},origin==='null'?'*':origin);};
     const emit=()=>window.dispatchEvent(new window.CustomEvent('ascii-orca:appearance',{detail:{...state}}));
     function settleSidebarGlass(){
@@ -253,7 +301,7 @@ html[data-orca-preview][${attr}] .markdown,html[data-orca-preview][${attr}] .spe
     return {
       stop() {
         if(stopped)return;stopped=true;cancelPendingWrite();unsubscribe();
-        reset.removeEventListener('click',onReset);frame.removeEventListener('load',send);toggle.removeEventListener('click',onToggle);controls.removeEventListener('change',save);controls.removeEventListener('input',onInput);controls.removeEventListener('keydown',onKey);document.removeEventListener('visibilitychange',onVisibilityChange);
+        retry.removeEventListener('click',onRetry);reset.removeEventListener('click',onReset);frame.removeEventListener('load',send);toggle.removeEventListener('click',onToggle);controls.removeEventListener('change',save);controls.removeEventListener('input',onInput);controls.removeEventListener('keydown',onKey);document.removeEventListener('visibilitychange',onVisibilityChange);
         frame.src='about:blank';frame.remove();controls.remove();style.remove();variables.remove();tokenDispose?.();tokenDispose=undefined;settleSidebarGlass();
         if(previousAttr===null)document.documentElement.removeAttribute(attr);else document.documentElement.setAttribute(attr,previousAttr);
         document.body.style.isolation=previousIsolation;

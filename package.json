@@ -1,6 +1,6 @@
 {
   "name": "dsh-whalepaper",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "description": "Live ASCII orca wallpaper for DeepSeek Harness, with a transparent chat workspace and settings in the plugin configuration page.",
   "license": "MIT",
@@ -25,7 +25,8 @@
     "THIRD_PARTY_NOTICES.md",
     "docs/REFERENCES.md",
     "docs/HARNESS.md",
-    "docs/DSH-HANDOFF.md"
+    "docs/DSH-HANDOFF.md",
+    "docs/CONTROLS-FIX-0.6.1.md"
   ],
   "dsh": {
     "bundle": {

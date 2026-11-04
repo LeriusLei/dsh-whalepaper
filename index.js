@@ -25,7 +25,7 @@ export const Config = Schema.object({
   enabled: Schema.boolean().default(true).description('显示壁纸').volatile(),
   theme: Schema.union(themes).default('auto').description('海洋时刻（auto 随系统时间）').volatile(),
   composition: Schema.union(compositions).default('balanced').description('海天比例').volatile(),
-  brightness: Schema.percent().default(0.97).description('壁纸亮度').volatile(),
+  brightness: Schema.percent().min(0.6).max(1).default(0.97).description('壁纸亮度').volatile(),
   saturation: Schema.number().step(0.01).min(0.3).max(1.15).role('slider').default(1.11).description('壁纸饱和度').volatile(),
   blur: Schema.number().min(0).max(4).step(0.1).default(0.3).description('壁纸柔化（px）').volatile(),
   quiet: Schema.boolean().default(true).description('安静游动').volatile(),

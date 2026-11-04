@@ -1,4 +1,6 @@
-# 交给 DeepSeek Harness 的接入说明 · 0.6.0
+# 交给 DeepSeek Harness 的接入说明 · 0.6.1
+
+0.6.1 修复异步设置旧快照导致的回弹/反跳，新增单请求合并保存与失败重试；三头虎鲸均参与约十分钟一次的鲸群明显活动。详情与验证范围见 [CONTROLS-FIX-0.6.1.md](CONTROLS-FIX-0.6.1.md)。以下保留此前的适配记录。
 
 这版海洋画面已由用户确认，默认数值保留。0.5.3 已把设置接入 DSH 原生插件设置页（「设置 → 插件 → 配置 dsh-whalepaper」），0.6.0 起左侧导航栏也随壁纸变化（原生侧栏 token 透明，并对 codex-ui 等自带侧栏表面的插件启用玻璃态），已在用户的 DSH 桌面 0.2.0-rc.2 本地 profile 实装验证：`/ascii-orca/index.html` 返回 200、客户端 bundle 进入宿主 boot 组合、`harness.log` 无本插件报错。安装会修改真实 profile 的 `cordis.patch.yml` 与 `package.json`（dsh.profile.bundles），测试前已备份为 `.bak-*` 文件。
 
@@ -18,7 +20,7 @@
 | 壁纸亮度 | 97% | `brightness: 0.97` |
 | 壁纸饱和度 | 111% | `saturation: 1.11` |
 | 壁纸柔化 | 0.3px | `blur: 0.3`，CSS像素 |
-| 安静游动 | 开 | `quiet: true`，完整模拟按0.72倍速度推进 |
+| 安静游动 | 开 | `quiet: true`，游动模拟按0.72倍速度推进；明显活动使用独立观看时钟 |
 | 暂停动画 | 关 | `paused: false` |
 | 显示壁纸 | 开 | `enabled: true` |
 | 海洋时刻 | 随当地时间 | `theme: "auto"`，保留八时段手动选择 |
