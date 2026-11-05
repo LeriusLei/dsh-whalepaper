@@ -2,11 +2,19 @@
 
 **在 DeepSeek Harness 里，养三头虎鲸。**
 
+![跃出水面与落水](docs/media/breach.gif)
+
+| 水下翻滚 | 浮出水面 · 喷水 · 下潜 |
+| :---: | :---: |
+| ![水下翻滚](docs/media/rolling.gif) | ![浮出水面、喷水与下潜](docs/media/surface-blow-dive.gif) |
+
+| 自在巡游 | 追赶鱼群 |
+| :---: | :---: |
+| ![自在巡游](docs/media/swimming.gif) | ![追赶鱼群](docs/media/chasing-fish.gif) |
+
 一片由 ASCII 字符绘成的三维海洋，陪你从日出到深夜。三头虎鲸自在游动、翻滚、潜入深海，偶尔浮出水面喷水、追赶鱼群，或跃出海面，溅起一片浪花。
 
 海里的每一刻都在实时演算。忙累了，就停下来看看鲸鱼。
-
-![潮汐之间 · 晚霞下的海洋](wallpaper/previews/sunset-golden.webp)
 
 ## 一天里的海
 
